@@ -275,7 +275,13 @@ _RESULTS_STRUCTURE = [
     ('batch_nlive', 'array[int]',
      "The number of live points added in a given batch ???"
      "How is it different from samples_n", 'nbatch???'),
-    ('scale', 'array[float]', "Scalar scale applied for proposals", 'niter')
+    ('scale', 'array[float]', "Scalar scale applied for proposals", 'niter'),
+    ('distance_insertion_index', 'array[int]',
+     "The number of live points closer to the start point than "
+     "the new point", 'niter'),
+    ('likelihood_insertion_index', 'array[int]',
+     "The number of live points with likelihood less than "
+     "the new point", 'niter'),
 ]
 
 

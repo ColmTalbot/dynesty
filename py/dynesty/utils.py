@@ -15,6 +15,7 @@ from collections import namedtuple
 from functools import partial
 import numpy as np
 from scipy.special import logsumexp
+from scipy.stats import randint, ks_1samp
 import pickle as pickle_module
 # To allow replacing of the pickler
 try:
@@ -32,7 +33,8 @@ from .results import Results, print_fn, results_substitute
 __all__ = [
     "unitcheck", "resample_equal", "mean_and_cov", "quantile", "jitter_run",
     "resample_run", "reweight_run", "unravel_run", "merge_runs", "kld_error",
-    "_merge_two", "_get_nsamps_samples_n", "get_enlarge_bootstrap"
+    "_merge_two", "_get_nsamps_samples_n", "get_enlarge_bootstrap",
+    "insertion_index_test",
 ]
 
 SQRTEPS = math.sqrt(float(np.finfo(np.float64).eps))
@@ -192,7 +194,11 @@ class RunRecord:
             'it',  # iteration the live (now dead) point was proposed
             'n',  # number of live points interior to dead point
             'bounditer',  # active bound at a specific iteration
-            'scale'  # scale factor at each iteration
+            'scale',  # scale factor at each iteration
+            'distance_insertion_index',
+            # number of points less distant from the starting point than the last inserted point
+            'likelihood_insertion_index',
+            # number of points with lower likelihood than the last inserted point
         ]
         if dynamic:
             keys.extend([
@@ -1752,3 +1758,38 @@ def save_sampler(sampler, fname):
         except:  # noqa
             pass
         raise
+
+
+def insertion_index_test(sampler, kind="likelihood", plot=False):
+    if plot:
+        import matplotlib.pyplot as plt
+
+    def compute_pvalue(_vals, _nlive):
+        dist = randint(1, _nlive + 1)
+        return ks_1samp(_vals, dist.cdf).pvalue
+
+    key = f"{kind}_insertion_index"
+    vals = np.array(sampler.saved_run.D[key])
+    select = vals >= 0
+    vals = vals[select]
+    if "batch" in sampler.saved_run.D:
+        pvals = list()
+        nlives = np.array(sampler.saved_run.D["batch_nlive"])[sampler.saved_run.D["batch"]]
+        nlives = nlives[select]
+        for nlive in np.unique(sampler.saved_run.D["batch_nlive"]):
+            vals_ = vals[nlives == nlive]
+            pval = compute_pvalue(vals_, nlive)
+            pvals.append(pval)
+            label = f"{kind.title()}: {pval:.2f}, $n_{{\\rm live}}={nlive}$"
+            if plot:
+                plt.hist(vals_ / nlive, bins=30, density=True, histtype="step", label=label)
+        return pvals
+    else:
+        nlive = sampler.nlive
+        pval = compute_pvalue(vals, sampler.nlive)
+        label = f"{kind.title()}: {pval:.2f}, $n_{{\\rm live}}={nlive}$"
+        if plot:
+            plt.hist(vals / nlive, bins=30, density=True, histtype="step", label=label)
+        return pval
+
+

@@ -674,7 +674,8 @@ class DynamicSampler:
                 ('bound_iter', np.array(self.saved_run.D['bounditer'])))
             results.append(
                 ('samples_bound', np.array(self.saved_run.D['boundidx'])))
-            results.append(('scale', np.array(self.saved_run.D['scale'])))
+            for key in ['scale', 'distance_insertion_index', 'likelihood_insertion_index']:
+                results.append((key, np.array(self.saved_run.D[key])))
 
         return Results(results)
 
@@ -914,7 +915,10 @@ class DynamicSampler:
                                 n=self.nlive_init,
                                 boundidx=results.boundidx,
                                 bounditer=results.bounditer,
-                                scale=self.sampler.scale)
+                                scale=self.sampler.scale,
+                                distance_insertion_index=self.sampler.distance_insertion_index,
+                                likelihood_insertion_index=self.sampler.likelihood_insertion_index,
+                                )
 
                 self.base_run.append(add_info)
                 self.saved_run.append(add_info)
@@ -957,7 +961,10 @@ class DynamicSampler:
                                 n=self.nlive_init - it,
                                 boundidx=results.boundidx,
                                 bounditer=results.bounditer,
-                                scale=self.sampler.scale)
+                                scale=self.sampler.scale,
+                                distance_insertion_index=-1,
+                                likelihood_insertion_index=-1,
+                                )
 
                 self.base_run.append(add_info)
                 self.saved_run.append(add_info)
@@ -1098,6 +1105,8 @@ class DynamicSampler:
         saved_logl = np.array(self.saved_run.D['logl'])
         saved_logvol = np.array(self.saved_run.D['logvol'])
         saved_scale = np.array(self.saved_run.D['scale'])
+        saved_distances_indices = np.array(self.saved_run.D["distance_insertion_index"])
+        saved_likelihood_indices = np.array(self.saved_run.D["likelihood_insertion_index"])
         nblive = self.nlive_init
 
         update_interval = self.__get_update_interval(update_interval,
@@ -1197,6 +1206,8 @@ class DynamicSampler:
                     self.new_logl_min = logl_min
 
                 live_scale = saved_scale[subset0[0]]
+                live_distance_index = saved_distances_indices[subset0[0]]
+                live_likelihood_index = saved_likelihood_indices[subset0[0]]
                 # set the scale based on the lowest point
 
                 # we are weighting each point by X_i to ensure
@@ -1244,6 +1255,8 @@ class DynamicSampler:
                 batch_sampler.live_v = live_v
                 batch_sampler.live_logl = live_logl
                 batch_sampler.scale = live_scale
+                batch_sampler.distance_insertion_index = live_distance_index
+                batch_sampler.likelihood_insertion_index = live_likelihood_index
 
                 # Trigger an update of the internal bounding distribution based
                 # on the "new" set of live points.
@@ -1362,7 +1375,10 @@ class DynamicSampler:
                          n=nlive_new,
                          boundidx=results.boundidx,
                          bounditer=results.bounditer,
-                         scale=batch_sampler.scale)
+                         scale=batch_sampler.scale,
+                         distance_insertion_index=batch_sampler.distance_insertion_index,
+                         likelihood_insertion_index=batch_sampler.likelihood_insertion_index,
+                         )
                 self.new_run.append(D)
 
                 # Increment relevant counters.
@@ -1400,7 +1416,10 @@ class DynamicSampler:
                          n=nlive_new - it,
                          boundidx=results.boundidx,
                          bounditer=results.bounditer,
-                         scale=batch_sampler.scale)
+                         scale=batch_sampler.scale,
+                         distance_insertion_index=-1,
+                         likelihood_insertion_index=-1,
+                         )
                 self.new_run.append(D)
 
                 # Increment relevant counters.
@@ -1430,8 +1449,9 @@ class DynamicSampler:
         new_d = {}
 
         for k in [
-                'id', 'u', 'v', 'logl', 'nc', 'boundidx', 'it', 'bounditer',
-                'n', 'scale'
+            'id', 'u', 'v', 'logl', 'nc', 'boundidx', 'it', 'bounditer',
+            'n', 'scale',
+            'distance_insertion_index', 'likelihood_insertion_index',
         ]:
             saved_d[k] = np.array(self.saved_run.D[k])
             new_d[k] = np.array(self.new_run.D[k])
@@ -1483,10 +1503,15 @@ class DynamicSampler:
                 idx_new += 1
 
             for k in [
-                    'id', 'u', 'v', 'logl', 'nc', 'boundidx', 'it',
-                    'bounditer', 'scale'
+                'id', 'u', 'v', 'logl', 'nc', 'boundidx', 'it',
+                'bounditer', 'scale',
+                'distance_insertion_index', 'likelihood_insertion_index',
             ]:
-                add_info[k] = add_source[k][add_idx]
+                try:
+                    add_info[k] = add_source[k][add_idx]
+                except IndexError:
+                    import IPython; IPython.embed()
+                    raise
             self.saved_run.append(add_info)
 
             # Save the number of live points and expected ln(volume).

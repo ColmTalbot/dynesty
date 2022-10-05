@@ -25,6 +25,7 @@ Includes:
 
 import math
 import copy
+import warnings
 import numpy as np
 from .sampler import Sampler
 from .bounding import (UnitCube, Ellipsoid, MultiEllipsoid, RadFriends,
@@ -67,7 +68,8 @@ class SuperSampler(Sampler):
                  pool,
                  use_pool,
                  kwargs=None,
-                 ncdim=0):
+                 ncdim=0,
+                 blob=False):
         # Initialize sampler.
         super().__init__(loglikelihood,
                          prior_transform,
@@ -79,7 +81,8 @@ class SuperSampler(Sampler):
                          queue_size,
                          pool,
                          use_pool,
-                         ncdim=ncdim)
+                         ncdim=ncdim,
+                         blob=blob)
         # Initialize method to propose a new starting point.
         self._PROPOSE = {
             'unif': self.propose_unif,
@@ -344,7 +347,8 @@ class UnitCubeSampler(SuperSampler):
                  pool,
                  use_pool,
                  kwargs=None,
-                 ncdim=0):
+                 ncdim=0,
+                 blob=False):
 
         # Initialize sampler.
         super().__init__(loglikelihood,
@@ -359,6 +363,7 @@ class UnitCubeSampler(SuperSampler):
                          pool,
                          use_pool,
                          ncdim=ncdim,
+                         blob=blob,
                          kwargs=kwargs or {})
 
         self.unitcube = UnitCube(self.ncdim)
@@ -465,6 +470,7 @@ class SingleEllipsoidSampler(SuperSampler):
                  pool,
                  use_pool,
                  kwargs=None,
+                 blob=False,
                  ncdim=0):
 
         # Initialize sampler.
@@ -480,6 +486,7 @@ class SingleEllipsoidSampler(SuperSampler):
                          pool,
                          use_pool,
                          ncdim=ncdim,
+                         blob=blob,
                          kwargs=kwargs or {})
 
         self.ell = Ellipsoid(np.zeros(self.ncdim), np.identity(self.ncdim))
@@ -509,6 +516,7 @@ class SingleEllipsoidSampler(SuperSampler):
         """Propose a new live point by sampling *uniformly*
         within the ellipsoid."""
 
+        threshold_warning = 10000
         if self.ncdim != self.npdim and self.nonbounded is not None:
             nonb = self.nonbounded[:self.ncdim]
         else:
@@ -522,7 +530,10 @@ class SingleEllipsoidSampler(SuperSampler):
             if unitcheck(u, nonb):
                 break  # if it is, we're done!
 
-        # TODO We should probably produce a warning if niter is too large
+        if niter > threshold_warning:
+            with warnings.catch_warnings():
+                warnings.filterwarnings("once")
+                warnings.warn("Ellipsoid sampling is extremely inefficient")
 
         if self.npdim != self.ncdim:
             u = np.concatenate(
@@ -619,6 +630,7 @@ class MultiEllipsoidSampler(SuperSampler):
                  pool,
                  use_pool,
                  kwargs=None,
+                 blob=False,
                  ncdim=0):
         # Initialize sampler.
         super().__init__(loglikelihood,
@@ -633,6 +645,7 @@ class MultiEllipsoidSampler(SuperSampler):
                          pool,
                          use_pool,
                          ncdim=ncdim,
+                         blob=blob,
                          kwargs=kwargs or {})
 
         self.mell = MultiEllipsoid(ctrs=[np.zeros(self.ncdim)],
@@ -663,6 +676,8 @@ class MultiEllipsoidSampler(SuperSampler):
         """Propose a new live point by sampling *uniformly* within
         the union of ellipsoids."""
 
+        threshold_warning = 10000
+
         if self.ncdim != self.npdim and self.nonbounded is not None:
             nonb = self.nonbounded[:self.ncdim]
         else:
@@ -679,7 +694,10 @@ class MultiEllipsoidSampler(SuperSampler):
             # Check if the point is within the unit cube.
             if unitcheck(u, nonb):
                 break  # if successful, we're done!
-        # TODO I should warn if niter is too high
+        if niter > threshold_warning:
+            with warnings.catch_warnings():
+                warnings.filterwarnings("once")
+                warnings.warn("Ellipsoid sampling is extremely inefficient")
         if self.ncdim != self.npdim:
             u = np.concatenate(
                 [u, self.rstate.uniform(0, 1, self.npdim - self.ncdim)])
@@ -800,6 +818,7 @@ class RadFriendsSampler(SuperSampler):
                  pool,
                  use_pool,
                  kwargs=None,
+                 blob=False,
                  ncdim=0):
 
         # Initialize sampler.
@@ -815,6 +834,7 @@ class RadFriendsSampler(SuperSampler):
                          pool,
                          use_pool,
                          ncdim=ncdim,
+                         blob=blob,
                          kwargs=kwargs or {})
 
         self.radfriends = RadFriends(self.ncdim)
@@ -950,6 +970,7 @@ class SupFriendsSampler(SuperSampler):
                  pool,
                  use_pool,
                  kwargs=None,
+                 blob=False,
                  ncdim=0):
 
         # Initialize sampler.
@@ -965,6 +986,7 @@ class SupFriendsSampler(SuperSampler):
                          pool,
                          use_pool,
                          ncdim=ncdim,
+                         blob=blob,
                          kwargs=kwargs or {})
 
         self.supfriends = SupFriends(self.ncdim)

@@ -413,6 +413,7 @@ argument::
     sampler = NestedSampler(loglike, ptform, ndim, pool=pool, queue_size=8)
 
 There is *no* reason to set queue_size to anything other then the number of parallel processes in the pool.
+
 Parallel operations in `dynesty` are done by simply swapping in the
 `pool.map` function over the default `map` function when making likelihood
 calls. Note that this is a *synchronous* function call, which requires that
@@ -451,6 +452,31 @@ combine multiple independent Nested Sampling runs into a single run, giving
 users an option as to whether they want to parallelize `dynesty` *during*
 runtime (using a user-provided `pool`) or *after* runtime (by merging
 the runs together).
+
+Dynesty multiprocessing pool
+----------------------------
+
+If you are running multiprocessing on a single machine, probably the easiest way
+of parallelizing is using a dynesty provided pool (which is a thin wrapper around
+python's multiprocessing pool)::
+
+    with Pool(10, loglike, ptform) as pool:
+        sampler = NestedSampler(pool.loglikehood, pool.prior_transform,
+	                        ndim, pool = pool)
+	sampler.run_nested()
+
+Note that we provide the likelihood function and prior transforms
+when we initialize the pool. When we run dynesty we provide the
+loglikelihood and prior tranforms from the pool. This approach minimizes
+the overhead from picking function repeatedly.
+
+If your function has additional arguments that are large, you can also provide
+them when initializing the pool::
+
+    with Pool(10, loglike, ptform, logl_args=loglike_args) as pool:
+        sampler = NestedSampler(pool.loglikehood, pool.prior_transform,
+	                        ndim, pool = pool)
+	sampler.run_nested()
 
 
 Running Internally
@@ -548,7 +574,30 @@ If you used the pool in the sampler and you want to use the pool after restoring
     sampler.run_nested(resume=True)
 
 The checkpointing may be helpful if you are running dynesty on HPC with a queue system that has a limit on a wall-time that your jobs can run.
-    
+
+Saving auxialiary information from log-likelihood function
+----------------------------------------------------------
+
+Occasionally it is useful to save the information computed by the likelihood function, such as various derived quantities. This information can be easily saved by dynesty together with the samples. To do that you need to use the blob option of NestedSampler and DynamicNestedSampler::
+
+    def loglike(x):
+        logl = -0.5 * np.sum(x**2)
+	blob = np.zeros(3)
+	blob[0] = x[0]
+	blob[1] = x[1]**2
+	blob[2] = logl+x[2]
+	# here the logl function return the logl and a numpy array
+	return logl, blob
+    # initialize our sampler
+    sampler = NestedSampler(loglike, ptform, ndim, nlive=100, blob=True)
+    # run the sampler with checkpointing 
+    sampler.run_nested()
+    results = sampler.results
+    aux_blob = results['blob']
+    # This variable will contain auxiliary blobs associated with samples
+
+The numpy blob can return arbitrary 1D numpy arrays. The can be record arrays as well. The only requirement is that the shape/dtype is exactly the same between the log-likelihood function calls.
+
 Running Externally
 ------------------
 
@@ -1050,14 +1099,14 @@ samples using the :meth:`~dynesty.utils.mean_and_cov` function::
 
     from dynesty import utils as dyfunc
 
-    samples, weights = res2.samples, np.exp(res2.logwt - res2.logz[-1])
+    samples, weights = res2.samples, res2.importance_weights()
     mean, cov = dyfunc.mean_and_cov(samples, weights)
 
 Runs can also be resampled to give a mew set of points with equal
-weights, similar to MCMC methods, using the 
+weights, similar to MCMC methods, using the
 :meth:`~dynesty.utils.resample_equal` function::
 
-    new_samples = dyfunc.resample_equal(samples, weights)
+    new_samples = res2.samples_equal()
 
-See :ref:`Nested Sampling Errors` for some additional discussion and 
+See :ref:`Nested Sampling Errors` for some additional discussion and
 demonstration of more functions.

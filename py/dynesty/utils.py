@@ -2296,10 +2296,31 @@ def save_sampler(sampler, fname):
         raise
 
 
-def insertion_index_test(sampler, kind="likelihood", plot=False):
-    if plot:
-        import matplotlib.pyplot as plt
+def insertion_index_test(sampler, kind="likelihood", ax=None):
+    """
+    Compute the p-value comparing the distribution of insertion indices with
+    the discrete uniform distribution as described in arxiv:2006.03371.
 
+    Parameters
+    ----------
+    sampler: dynesty.sampler.Sampler
+        The sampler object used for a NS analysis
+    kind: str
+        The name of the quantity for which to test the insertion indices.
+        The allowed values are:
+        - likelihood
+        - distance
+    ax: matplotlib.Axis
+        If passed, the insertion indices will be histogramed on the axis.
+
+    Returns
+    -------
+    pval: float, array-like
+        The p value(s) comparing the insertion indices to the discrete uniform
+        distribution
+        If analyzing a dynamic NS run, one p value is returned for each
+        distinct number of live points, typically two.
+    """
     def compute_pvalue(_vals, _nlive):
         dist = randint(1, _nlive + 1)
         return ks_1samp(_vals, dist.cdf).pvalue
@@ -2317,15 +2338,15 @@ def insertion_index_test(sampler, kind="likelihood", plot=False):
             pval = compute_pvalue(vals_, nlive)
             pvals.append(pval)
             label = f"{kind.title()}: {pval:.2f}, $n_{{\\rm live}}={nlive}$"
-            if plot:
-                plt.hist(vals_ / nlive, bins=30, density=True, histtype="step", label=label)
+            if ax is not None:
+                ax.hist(vals_ / nlive, bins=30, density=True, histtype="step", label=label)
         return pvals
     else:
         nlive = sampler.nlive
         pval = compute_pvalue(vals, sampler.nlive)
         label = f"{kind.title()}: {pval:.2f}, $n_{{\\rm live}}={nlive}$"
-        if plot:
-            plt.hist(vals / nlive, bins=30, density=True, histtype="step", label=label)
+        if ax is not None:
+            ax.hist(vals / nlive, bins=30, density=True, histtype="step", label=label)
         return pval
 
 

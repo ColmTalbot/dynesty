@@ -370,11 +370,17 @@ class Sampler:
         self.queue = new_queue
 
     def _distance_insertion_index(self, start, point):
+        """
+        Compute the distance insertion index as defined in XXX
+        """
         distance = np.linalg.norm(point - start)
         all_distances = np.array([np.linalg.norm(start - u) for u in self.live_u])
         return sum(all_distances < distance)
 
     def _likelihood_insertion_index(self, logl):
+        """
+        Compute the likelihood insertion index as defined in arxiv:2006.03371
+        """
         return sum(np.array(self.live_logl) < logl)
 
     def _get_point_value(self, loglstar):

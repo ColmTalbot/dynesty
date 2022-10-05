@@ -2305,14 +2305,14 @@ def insertion_index_test(sampler, kind="likelihood", plot=False):
         return ks_1samp(_vals, dist.cdf).pvalue
 
     key = f"{kind}_insertion_index"
-    vals = np.array(sampler.saved_run.D[key])
+    vals = np.array(sampler.saved_run[key])
     select = vals >= 0
     vals = vals[select]
     if "batch" in sampler.saved_run.D:
         pvals = list()
-        nlives = np.array(sampler.saved_run.D["batch_nlive"])[sampler.saved_run.D["batch"]]
+        nlives = np.array(sampler.saved_run["batch_nlive"])[sampler.saved_run["batch"]]
         nlives = nlives[select]
-        for nlive in np.unique(sampler.saved_run.D["batch_nlive"]):
+        for nlive in np.unique(sampler.saved_run["batch_nlive"]):
             vals_ = vals[nlives == nlive]
             pval = compute_pvalue(vals_, nlive)
             pvals.append(pval)

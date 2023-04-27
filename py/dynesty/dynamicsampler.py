@@ -52,6 +52,7 @@ class DynamicSamplerStatesEnum(Enum):
     BATCH_DONE = 6  # after at least one batch
     INBASEADDLIVE = 7  # during addition of livepoints in the
     INBATCHADDLIVE = 8  # during addition of livepoints in the
+    RUN_DONE = 9  # The run has ended
     # end of the base run
 
 
@@ -69,8 +70,8 @@ def compute_weights(results):
         # this pathological case can happen if all logl are very small
         # and all logz are very small and the same
         # then the calculation below failse
-        warnings.warn('''The calculation of weights is seeing same 
-logz values associated with all the samples. It may mean somethings is 
+        warnings.warn('''The calculation of weights is seeing same
+logz values associated with all the samples. It may mean somethings is
 wrong with your likelihood.''')
         zweight = np.ones(len(logl)) / len(logl)
     else:
@@ -176,8 +177,8 @@ def weight_function(results, args=None, return_weights=False):
         logl_max = np.inf
     if return_weights:
         return (logl_min, logl_max), (pweight, zweight, weight)
-    else:
-        return (logl_min, logl_max)
+
+    return (logl_min, logl_max)
 
 
 def _get_update_interval_ratio(update_interval, sample, bound, ndim, nlive,
@@ -401,18 +402,27 @@ def _initialize_live_points(live_points,
         # If no live points are provided, propose them by randomly
         # sampling from the unit cube.
         n_attempts = 1000
-        min_npoints = max(npdim, 10)
+
+        min_npoints = min(nlive, max(npdim + 1, 10))
         # the minimum number points we want with finite logl
-        # we want want at least npdim, because we wanto be able to constraint
+        # we want want at least npdim+1, because we wanto be able to constraint
         # the ellipsoid
-        # and we do not accept below 10 pts, because the volume error
-        # will be large
+        # Note that if nlive <npdim+ 1 this doesn't really make sense
+        # but we should have warned the user earlier, so they are on their own
+        # And the reason we have max(npdim+1, 10) is that we'd like to get at
+        # least 10 points as otherwise the poisson estimate of the volume will
+        # be too large.
+
         live_u = np.zeros((nlive, npdim))
         live_v = np.zeros((nlive, npdim))
         live_logl = np.zeros(nlive)
-        ngoods = 0
+        ngoods = 0  # counter for how many finite logl we have found
         live_blobs = []
-        for iattempt in range(1, n_attempts + 1):
+        iattempt = 0
+        while True:
+            iattempt += 1
+
+            # simulate nlive points by uniform sampling
             cur_live_u = rstate.random(size=(nlive, npdim))
             if use_pool_ptform:
                 cur_live_v = M(prior_transform, np.asarray(cur_live_u))
@@ -424,6 +434,7 @@ def _initialize_live_points(live_points,
                 cur_live_blobs = np.array([_.blob for _ in cur_live_logl])
             cur_live_logl = np.array([_.val for _ in cur_live_logl])
             ncalls += nlive
+
             # Convert all `-np.inf` log-likelihoods to finite large
             # numbers. Necessary to keep estimators in our sampler from
             # breaking.
@@ -435,9 +446,12 @@ def _initialize_live_points(live_points,
                                  "point is invalid.")
             cur_live_logl[not_finite] = _LOWL_VAL
 
+            # how many finite logl values we have
             cur_ngood = finite.sum()
             if cur_ngood > 0:
+                # append them to our list
                 nextra = min(nlive - ngoods, cur_ngood)
+                assert nextra >= 0
                 cur_ind = np.nonzero(finite)[0][:nextra]
                 live_logl[ngoods:ngoods + nextra] = cur_live_logl[cur_ind]
                 live_u[ngoods:ngoods + nextra] = cur_live_u[cur_ind]
@@ -445,15 +459,16 @@ def _initialize_live_points(live_points,
                 if blob:
                     live_blobs.extend(cur_live_blobs[cur_ind])
                 ngoods += nextra
-            # Check to make sure there are enough finite
-            # log-likelihood value within the initial set of live
-            # points.
-            if ngoods > min_npoints:
+
+            # Check if we have more than the minimum required number
+            # after that we will stop
+            if ngoods >= min_npoints:
                 # we need to fill the rest with points with
                 # not finite logl
                 nextra = nlive - ngoods
                 if nextra > 0:
                     cur_ind = np.nonzero(not_finite)[0][:nextra]
+                    assert len(cur_ind) == nextra
                     live_logl[ngoods:ngoods + nextra] = cur_live_logl[cur_ind]
                     live_u[ngoods:ngoods + nextra] = cur_live_u[cur_ind]
                     live_v[ngoods:ngoods + nextra] = cur_live_v[cur_ind]
@@ -470,13 +485,22 @@ def _initialize_live_points(live_points,
                 # (n-k)  LOWL points
                 # The volume is k/(Nn) + (n-k)/(Nn) = 1/N
                 break
-        else:
-            # If we found nothing after many attempts, raise the alarm.
-            raise RuntimeError(f"After {n_attempts} attempts, we cound not "
-                               f"find at least {min_npoints} points"
-                               "that have a valid log-likelihood! Please "
-                               "check your prior transform and/or "
-                               "log-likelihood.")
+            if iattempt == n_attempts:
+                if ngoods == 0:
+                    # If we found nothing after many attempts, raise the alarm.
+                    raise RuntimeError(
+                        f"After {n_attempts} attempts, we cound not "
+                        "find a single point "
+                        "that have a valid log-likelihood! Please "
+                        "check your prior transform and/or "
+                        "log-likelihood.")
+                else:
+                    # If we found nothing after many attempts, raise the alarm.
+                    warnings.warn(f"After {n_attempts} attempts, we cound not "
+                                  f"find at least {min_npoints} points "
+                                  "that have a valid log-likelihood! "
+                                  "The initial sampling is very inefficient!")
+
     else:
         # If live points were provided, convert the log-likelihoods and
         # then run a quick safety check.
@@ -496,7 +520,7 @@ def _initialize_live_points(live_points,
         if np.all(live_logl == _LOWL_VAL):
             raise ValueError("Not a single provided live point has a "
                              "valid log-likelihood!")
-    if (np.ptp(live_logl) == 0):
+    if np.ptp(live_logl) == 0:
         warnings.warn(
             'All the initial likelihood values are the same. '
             'You likely have a plateau in the likelihood. '
@@ -597,6 +621,7 @@ def _configure_batch_sampler(main_sampler,
         kwargs=main_sampler.kwargs,
         blob=main_sampler.blob)
     batch_sampler.save_bounds = save_bounds
+    batch_sampler.logl_first_update = main_sampler.sampler.logl_first_update
 
     # Initialize ln(likelihood) bounds.
     if logl_bounds is None:
@@ -653,6 +678,9 @@ def _configure_batch_sampler(main_sampler,
                                     boundidx=0,
                                     bounditer=0,
                                     eff=main_sampler.eff))
+        batch_sampler.update_bound_if_needed(logl_min)
+        # Trigger an update of the internal bounding distribution based
+        # on the "new" set of live points.
     else:
         # If the lower bound doesn't encompass all base samples,
         # we need to create a uniform sample from the prior subject
@@ -743,15 +771,10 @@ def _configure_batch_sampler(main_sampler,
         batch_sampler.live_blobs = live_blobs
         batch_sampler.distance_insertion_index = live_distance_index
         batch_sampler.likelihood_insertion_index = live_likelihood_index
+        batch_sampler.update_bound_if_needed(logl_min)
         # Trigger an update of the internal bounding distribution based
         # on the "new" set of live points.
 
-        bound = batch_sampler.update()
-        if save_bounds:
-            batch_sampler.bound.append(copy.deepcopy(bound))
-        batch_sampler.nbound += 1
-        batch_sampler.since_update = 0
-        batch_sampler.logl_first_update = logl_min
         live_u = np.empty((nlive_new, main_sampler.npdim))
         live_v = np.empty((nlive_new, saved_v.shape[1]))
         live_logl = np.empty(nlive_new)
@@ -805,15 +828,7 @@ def _configure_batch_sampler(main_sampler,
     batch_sampler.live_blobs = live_blobs
     batch_sampler.live_it = live_it
 
-    # Trigger an update of the internal bounding distribution
-    if not psel:
-        bound = batch_sampler.update()
-        if save_bounds:
-            batch_sampler.bound.append(copy.deepcopy(bound))
-        batch_sampler.nbound += 1
-        batch_sampler.since_update = 0
-        batch_sampler.logl_first_update = logl_min
-    else:
+    if psel:
         batch_sampler.logvol_init = logvol0
 
     # Figure out where the new run would would join the previous run
@@ -1563,7 +1578,7 @@ class DynamicSampler:
             # I have decided that maxcall/maxiter_left will not be preserved
             # if interrupted and resumed
 
-        for i in range(len(batch_sampler.first_points)):
+        for _ in range(len(batch_sampler.first_points)):
             yield batch_sampler.first_points.pop(0)
             # these yields are just for printing
             # we are not actually storing those in new_run
@@ -2032,6 +2047,11 @@ class DynamicSampler:
         maxcall_init = min(maxcall_init, maxcall)  # set max calls
         maxiter_init = min(maxiter_init, maxiter)  # set max iterations
 
+        if resume and self.internal_state == DynamicSamplerStatesEnum.RUN_DONE:
+            warnings.warn(
+                """You tried to resume the run that has ended successfully.
+This is not supported. No sampling was performed""", RuntimeWarning)
+            return
         # Baseline run.
         pbar, print_func = get_print_func(print_func, print_progress)
         timer = DelayTimer(checkpoint_every)
@@ -2120,6 +2140,7 @@ class DynamicSampler:
                 else:
                     # We didn't run a single batch but now we're done!
                     break
+            self.internal_state = DynamicSamplerStatesEnum.RUN_DONE
             if checkpoint_file is not None:
                 # In the very end I save the checkpoint no matter
                 # the timing
@@ -2301,6 +2322,8 @@ class DynamicSampler:
                                    logl_max=logl_max)
                     if (checkpoint_file is not None and self.internal_state !=
                             DynamicSamplerStatesEnum.INBATCHADDLIVE
+                            and self.internal_state !=
+                            DynamicSamplerStatesEnum.BATCH_DONE
                             and timer.is_time()):
                         # we do not save the state if we are finishing the
                         # batch run and we are just adding live-points in

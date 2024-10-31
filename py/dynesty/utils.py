@@ -78,42 +78,58 @@ class LoglOutput:
             self.blob = v[1]
         else:
             self.val = v
+            self.blob = None
+        self.blob_flag = blob_flag
+
+    def __init_subclass__(cls):
+        from jax.tree_util import register_pytree_node
+        register_pytree_node(cls, cls.pytree_flatten, cls.pytree_unflatten)
+
+    def pytree_flatten(self):
+        return (self.val, self.blob), dict(blob_flag=self.blob_flag)
+
+    @classmethod
+    def pytree_unflatten(cls, aux_data, data):
+        if aux_data['blob_flag']:
+            return cls(data, aux_data["blob_flag"]), dict()
+        else:
+            return cls(data[0], None), dict()
 
     def __lt__(self, v1):
         """
         Comparison override, we just use .val attribute in the comparison
         """
-        return float(self) < float(v1)
+        return self.val < v1
 
     def __gt__(self, v1):
         """
         Comparison override, we just use .val attribute in the comparison
         """
-        return float(self) > float(v1)
+        return self.val > v1
 
     def __le__(self, v1):
         """
         Comparison override, we just use .val attribute in the comparison
         """
-        return float(self) <= float(v1)
+        return self.val <= v1
 
     def __ge__(self, v1):
         """
         Comparison override, we just use .val attribute in the comparison
         """
-        return float(self) >= float(v1)
+        return self.val >= v1
 
     def __eq__(self, v1):
         """
         Comparison override, we just use .val attribute in the comparison
         """
-        return float(self) == float(v1)
+        return self.val == v1
 
     def __float__(self):
         """
         Comparison override, we just use .val attribute in the comparison
         """
-        return float(self.val)
+        return self.val
 
 
 class LogLikelihood:
@@ -185,7 +201,8 @@ class LogLikelihood:
         """
         Evaluate the likelihood f-n once
         """
-        ret = LoglOutput(self.loglikelihood(x), self.blob)
+        # ret = LoglOutput(self.loglikelihood(x), self.blob)
+        ret = self.loglikelihood(x)
         if self.save:
             self.history_append([ret.val], [x])
         return ret
@@ -865,12 +882,87 @@ def get_print_func(print_func, print_progress):
     return pbar, print_func
 
 
+class JAXGenerator:
+
+    def __init__(self, seed):
+        self.key = seed
+
+    @property
+    def key(self):
+        import jax
+        self._key, subkey = jax.random.split(self._key)
+        return subkey
+
+    @key.setter
+    def key(self, value):
+        self._key = value
+
+    def uniform(self, size=None):
+        import jax
+        if isinstance(size, int):
+            size = (size,)
+        return jax.random.uniform(self.key, shape=size)
+
+    def integers(self, low, high=None, size=None):
+        import jax
+        if isinstance(size, int):
+            size = (size,)
+        elif size is None:
+            size = (1,)
+        if high is None:
+            high = low
+            low = 0
+        return jax.random.randint(self.key, minval=low, maxval=high, shape=size).squeeze()
+
+    def beta(self, a, b, size=None):
+        import jax
+        if isinstance(size, int):
+            size = (size,)
+        return jax.random.beta(self.key, a, b, shape=size)
+
+    def random(self, size=None):
+        return self.uniform(size=size)
+
+    def standard_normal(self, size=None):
+        import jax
+        if isinstance(size, int):
+            size = (size,)
+        return jax.random.normal(self.key, shape=size)
+
+    def choice(self, a, size=None):
+        import jax
+        if isinstance(size, int):
+            size = (size,)
+        if isinstance(a, int):
+            a = jax.numpy.arange(a)
+        return jax.random.choice(self.key, a, shape=size)
+
+    def pytree_flatten(self):
+        return (self.key,), dict()
+    
+    @classmethod
+    def pytree_unflatten(cls, aux_data, data):
+        return cls(*data, **aux_data)
+
+
+import jax
+
+jax.tree_util.register_pytree_node(
+    JAXGenerator,
+    JAXGenerator.pytree_flatten,
+    JAXGenerator.pytree_unflatten,
+)
+
+
 def get_random_generator(seed=None):
     """
     Return a random generator (using the seed provided if available)
     """
-    if isinstance(seed, np.random.Generator):
+    import jax
+    if isinstance(seed, (np.random.Generator, JAXGenerator)):
         return seed
+    elif isinstance(seed, jax.Array):
+        return JAXGenerator(seed)
     return np.random.Generator(np.random.PCG64(seed))
 
 
@@ -879,8 +971,15 @@ def get_seed_sequence(rstate, nitems):
     Return the list of seeds to initialize random generators
     This is useful when distributing work across a pool
     """
-    seeds = np.random.SeedSequence(rstate.integers(0, 2**63 - 1,
-                                                   size=4)).spawn(nitems)
+    if isinstance(rstate, np.random.Generator):
+        seeds = rstate.integers(0, 2**63 - 1, size=nitems)
+    elif isinstance(rstate, JAXGenerator):
+        import jax.numpy as jnp
+        seeds = rstate.integers(0, 2**31 - 1, size=(nitems, 2)).astype(jnp.uint32)
+    elif isinstance(rstate, jax.Array):
+        seeds = jax.random.split(rstate, nitems)
+    # seeds = np.random.SeedSequence(rstate.integers(0, 2**63 - 1,
+    #                                                size=4)).spawn(nitems)
     return seeds
 
 

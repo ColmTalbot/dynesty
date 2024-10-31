@@ -27,6 +27,8 @@ import math
 import copy
 import warnings
 import numpy as np
+from scipy._lib._array_api import array_namespace
+
 from .sampler import Sampler
 from .bounding import (UnitCube, Ellipsoid, MultiEllipsoid, RadFriends,
                        SupFriends, rand_choice)
@@ -381,9 +383,9 @@ class UnitCubeSampler(SuperSampler):
     def propose_unif(self, *args):
         """Propose a new live point by sampling *uniformly*
         within the unit cube."""
-
         u = self.unitcube.sample(rstate=self.rstate)
-        ax = np.identity(self.npdim)
+        xp = array_namespace(u)
+        ax = xp.identity(self.npdim)
         if self.npdim != self.ncdim:
             u = np.concatenate(
                 [u, self.rstate.random(size=self.npdim - self.ncdim)])

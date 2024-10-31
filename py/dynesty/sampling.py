@@ -7,11 +7,14 @@ Functions for proposing new live points used by
 :class:`~dynesty.dynamicsampler.DynamicSampler`.
 
 """
+from functools import partial
 
 from collections import namedtuple
 import warnings
 import numpy as np
 from numpy import linalg
+import jax
+from scipy._lib._array_api import array_namespace
 
 from .utils import unitcheck, apply_reflect, get_random_generator
 from .bounding import randsphere
@@ -27,7 +30,8 @@ SamplerArgument = namedtuple('SamplerArgument', [
 ])
 
 
-def sample_unif(args):
+@partial(jax.jit, static_argnames=("prior_transform", "loglikelihood"))
+def sample_unif(u, axes, rseed, prior_transform, loglikelihood, loglstar, scale, kwargs):
     """
     Evaluate a new point sampled uniformly from a bounding proposal
     distribution. Parameters are zipped within `args` to utilize
@@ -80,16 +84,13 @@ def sample_unif(args):
         applicable for uniform sampling.**
 
     """
-
-    # Unzipping.
-
-    # Evaluate.
-    v = args.prior_transform(np.asarray(args.u))
-    logl = args.loglikelihood(np.asarray(v))
+    xp = array_namespace(u)
+    v = xp.asarray(prior_transform(xp.asarray(u)))
+    logl = loglikelihood(v)
     nc = 1
     blob = None
 
-    return args.u, v, logl, nc, blob
+    return u, v, logl, nc, blob
 
 
 def sample_rwalk(args):

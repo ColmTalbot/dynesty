@@ -11,6 +11,7 @@ import sys
 import warnings
 import traceback
 import numpy as np
+from scipy._lib._array_api import array_namespace
 
 from .nestedsamplers import _SAMPLING, SuperSampler
 from .dynamicsampler import (DynamicSampler, _get_update_interval_ratio,
@@ -211,7 +212,7 @@ def _parse_pool_queue(pool, queue_size):
                                  "define `pool.size` or specify `queue_size` "
                                  "explicitly.") from e
     else:
-        raise ValueError("`queue_size > 1` but no `pool` provided.")
+        M = None
 
     return M, queue_size
 
@@ -893,6 +894,15 @@ class _function_wrapper:
 
     """
 
+    def __init_subclass__(cls):
+        import jax
+
+        jax.tree_util.register_pytree_node(
+            cls,
+            pytree_flatten_func,
+            pytree_unflatten_func,
+        )
+
     def __init__(self, func, args, kwargs, name='input'):
         self.func = func
         self.args = args
@@ -907,7 +917,8 @@ class _function_wrapper:
             # say prior_transform or likelihood
             # This comes at performance cost, but it's worthwhile
             # as it may lead to hard to diagnose weird behaviour
-            return self.func(np.asarray(x).copy(), *self.args, **self.kwargs)
+            xp = array_namespace(x)
+            return self.func(xp.asarray(x).copy(), *self.args, **self.kwargs)
         except:  # noqa
             print(f"Exception while calling {self.name} function:")
             print("  params:", x)
@@ -916,3 +927,9 @@ class _function_wrapper:
             print("  exception:")
             traceback.print_exc()
             raise
+
+def pytree_flatten_func(obj):
+    return (obj.func, obj.args, obj.kwargs, obj.name), None
+
+def pytree_unflatten_func(aux_data, data):
+    return _function_wrapper(*data)

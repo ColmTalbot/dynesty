@@ -10,7 +10,10 @@ import sys
 import warnings
 import math
 import copy
+import jax
 import numpy as np
+from scipy._lib._array_api import array_namespace
+
 from .results import Results, print_fn
 from .bounding import UnitCube
 from .sampling import sample_unif, SamplerArgument
@@ -90,14 +93,20 @@ class Sampler:
         self.ncdim = ncdim
         self.blob = blob
         # live points
+        import jax
+
         self.live_u, self.live_v, self.live_logl = live_points[:3]
+        self.live_u = jax.numpy.array(self.live_u)
+        self.live_v = jax.numpy.array(self.live_v)
+        self.live_logl = jax.numpy.array(self.live_logl)
+        xp = array_namespace(self.live_u)
         if blob:
             self.live_blobs = live_points[3]
         else:
             self.live_blobs = None
         self.nlive = len(self.live_u)
-        self.live_bound = np.zeros(self.nlive, dtype=int)
-        self.live_it = np.zeros(self.nlive, dtype=int)
+        self.live_bound = xp.zeros(self.nlive, dtype=int)
+        self.live_it = xp.zeros(self.nlive, dtype=int)
 
         # random state
         self.rstate = rstate
@@ -192,19 +201,20 @@ class Sampler:
 
         # live points
         self.live_u = self.rstate.random(size=(self.nlive, self.npdim))
+        xp = array_namespace(self.live_u)
         if self.use_pool_ptform:
             # Use the pool to compute the prior transform.
-            self.live_v = np.array(
-                list(self.M(self.prior_transform, np.asarray(self.live_u))))
+            self.live_v = xp.array(
+                list(self.M(self.prior_transform, xp.asarray(self.live_u))))
         else:
             # Compute the prior transform using the default `map` function.
-            self.live_v = np.array(
-                list(map(self.prior_transform, np.asarray(self.live_u))))
-        self.live_logl = np.array(
-            [_.val for _ in self.loglikelihood.map(np.asarray(self.live_v))])
+            self.live_v = xp.array(
+                list(map(self.prior_transform, xp.asarray(self.live_u))))
+        self.live_logl = xp.array(
+            [_.val for _ in self.loglikelihood.map(xp.asarray(self.live_v))])
 
-        self.live_bound = np.zeros(self.nlive, dtype=int)
-        self.live_it = np.zeros(self.nlive, dtype=int)
+        self.live_bound = xp.zeros(self.nlive, dtype=int)
+        self.live_it = xp.zeros(self.nlive, dtype=int)
 
         # parallelism
         self.queue = []
@@ -343,9 +353,10 @@ class Sampler:
         # satisfying a strict logl>loglstar criterion
         # The slice sampler will just fail if it's not the case
         # therefore we provide those subsets of points to choose from.
+        xp = array_namespace(self.live_logl)
 
         if self.method != 'unif':
-            args = (np.nonzero(self.live_logl > loglstar)[0], )
+            args = (xp.nonzero(self.live_logl > loglstar)[0], )
             if len(args[0]) == 0:
                 raise RuntimeError(
                     'No live points are above loglstar. '
@@ -355,49 +366,46 @@ class Sampler:
         else:
             args = ()
         if not self.unit_cube_sampling:
-            # Add/zip arguments to submit to the queue.
             point_queue = []
-            axes_queue = []
-            # Propose points using the provided sampling/bounding options.
             evolve_point = self.evolve_point
-            while self.nqueue < self.queue_size:
-                point, axes = self.propose_point(*args)
+            for _ in range(self.queue_size - self.nqueue):
+                point, _ = self.propose_point(*args)
                 point_queue.append(point)
-                axes_queue.append(axes)
-                self.nqueue += 1
+            point_queue = jax.numpy.vstack(point_queue)
+            self.nqueue = self.queue_size
         else:
             # Propose/evaluate points directly from the unit cube.
             point_queue = self.rstate.random(size=(self.queue_size -
                                                    self.nqueue, self.npdim))
-            axes_queue = np.identity(
-                self.ncdim)[None, :, :] + np.zeros(self.queue_size -
-                                                   self.nqueue)[:, None, None]
             evolve_point = sample_unif
             self.nqueue = self.queue_size
+        axis = xp.identity(self.ncdim)  # + xp.zeros(self.queue_size - self.nqueue)
         if self.queue_size > 1:
             seeds = get_seed_sequence(self.rstate, self.queue_size)
         else:
             seeds = [self.rstate]
 
-        if self.use_pool_evolve:
-            # Use the pool to propose ("evolve") a new live point.
-            mapper = self.M
+        for key, value in self.kwargs.items():
+            if isinstance(value, np.ndarray):
+                self.kwargs[key] = xp.asarray(value)
+        kwargs = {
+            k: v for k, v in self.kwargs.copy().items()
+            if isinstance(v, (float, int, jax.Array)) or v is None
+        }
+        ptform = self.prior_transform
+        lnl = self.loglikelihood
+        map_axes = (0, None, 0, None, None, None, None, None)
+        u, v, logl, nc, blob = jax.vmap(evolve_point, in_axes=map_axes)(
+            point_queue, axis, seeds, ptform, lnl, loglstar, self.scale, kwargs
+        )
+        if blob is None:
+            blob = [None] * self.queue_size
         else:
-            # Propose ("evolve") a new live point using the default `map`
-            # function.
-            mapper = map
-        args = []
-        for i in range(self.queue_size):
-            args.append(
-                SamplerArgument(u=point_queue[i],
-                                loglstar=loglstar,
-                                axes=axes_queue[i],
-                                scale=self.scale,
-                                prior_transform=self.prior_transform,
-                                loglikelihood=self.loglikelihood,
-                                rseed=seeds[i],
-                                kwargs=self.kwargs))
-        self.queue = list(mapper(evolve_point, args))
+            blob = [
+                {k: v for k, v in zip(blob.keys(), values)}
+                for values in zip(*[value for value in blob.values()])
+            ]
+        self.queue = list(zip(u, v, logl, nc, blob))
         self._add_insertion_indices_to_queue(point_queue)
 
     def _add_insertion_indices_to_queue(self, point_queue):
@@ -413,16 +421,18 @@ class Sampler:
         """
         Compute the distance insertion index as defined in XXX
         """
-        norms = np.std(self.live_u, axis=0)
-        distance = np.linalg.norm((point - start) / norms)
-        all_distances = np.array([np.linalg.norm((start - u) / norms) for u in self.live_u])
-        return sum(all_distances < distance)
+        xp = array_namespace(point)
+        norms = xp.std(self.live_u, axis=0)
+        distance = xp.linalg.norm((point - start) / norms)
+        all_distances = xp.array([xp.linalg.norm((start - u) / norms) for u in self.live_u])
+        return xp.sum(all_distances < distance)
 
     def _likelihood_insertion_index(self, logl):
         """
         Compute the likelihood insertion index as defined in arxiv:2006.03371
         """
-        return sum(np.array(self.live_logl) < logl)
+        xp = array_namespace(self.live_logl)
+        return xp.sum(xp.array(self.live_logl) < logl)
 
     def _get_point_value(self, loglstar):
         """Grab the first live point proposal in the queue."""
@@ -511,28 +521,29 @@ class Sampler:
         # The tricky bit here is what to do if we have a plateau that we
         # haven't fully exhausted
         # then we first use the old delta(V) till we are done with the plateau
+        xp = array_namespace(self.live_logl)
         if not self.plateau_mode:
-            logvols = np.log(1. - (np.arange(self.nlive) + 1.) /
+            logvols = xp.log(1. - (xp.arange(self.nlive) + 1.) /
                              (self.nlive + 1.))
             # Defining change in `logvol` used in `logzvar` approximation.
         else:
             # we first just use old delta(v)'s associated with each point
             # in the plateau
-            logvols = np.log1p(-((1 + np.arange(self.plateau_counter)) *
-                                 np.exp(self.plateau_logdvol - logvol)))
+            logvols = xp.log1p(-((1 + xp.arange(self.plateau_counter)) *
+                                 xp.exp(self.plateau_logdvol - logvol)))
             # after we're done with it we just assign 1/(nrest+1) fraction of
             # the remaining volume to each leftover point
             nrest = self.nlive - self.plateau_counter
-            logvols = np.concatenate([
+            logvols = xp.concatenate([
                 logvols,
-                logvols[-1] + np.log1p(-(1 + np.arange(nrest)) / (nrest + 1))
+                logvols[-1] + xp.log1p(-(1 + xp.arange(nrest)) / (nrest + 1))
             ])
         # IMPORTANT in those caclulations I keep logvol separate
         # and add it later to ensure the first dlv=0
-        dlvs = -np.diff(logvols, prepend=0)
+        dlvs = -xp.diff(logvols, prepend=0)
         logvols += logvol
         # Sorting remaining live points.
-        lsort_idx = np.argsort(self.live_logl)
+        lsort_idx = xp.argsort(self.live_logl)
         loglmax = max(self.live_logl)
 
         # Grabbing relevant values from the last dead point.
@@ -565,7 +576,7 @@ class Sampler:
              h) = progress_integration(loglstar, loglstar_new, logz, logzvar,
                                        logvol, dlv, h)
             loglstar = loglstar_new
-            delta_logz = np.logaddexp(0, loglmax + logvol - logz)
+            delta_logz = xp.logaddexp(0, loglmax + logvol - logz)
 
             # Save results.
             if self.save_samples:
@@ -740,6 +751,7 @@ class Sampler:
             current evidence.
 
         """
+        xp = array_namespace(self.live_u)
 
         # Initialize quantities.
         if maxcall is None:
@@ -770,15 +782,15 @@ class Sampler:
                 self.saved_run[_][-1]
                 for _ in ['h', 'logz', 'logzvar', 'logvol', 'logl']
             ]
-            delta_logz = np.logaddexp(0,
-                                      np.max(self.live_logl) + logvol - logz)
+            delta_logz = xp.logaddexp(0,
+                                      xp.max(self.live_logl) + logvol - logz)
 
         nplateau = 0
         stop_iterations = False
         # The main nested sampling loop.
         for it in range(sys.maxsize):
-            delta_logz = np.logaddexp(0,
-                                      np.max(self.live_logl) + logvol - logz)
+            delta_logz = xp.logaddexp(0,
+                                      xp.max(self.live_logl) + logvol - logz)
 
             # Stopping criterion 1: current number of iterations
             # exceeds `maxiter`.
@@ -820,7 +832,7 @@ class Sampler:
                         self.added_live = False
                     if current_n_effective > n_effective:
                         stop_iterations = True
-            if self.live_logl.ptp() == 0:
+            if xp.ptp(self.live_logl) == 0:
                 warnings.warn(
                     'We have reached the plateau in the likelihood we are'
                     ' stopping sampling')
@@ -838,7 +850,7 @@ class Sampler:
                     self.saved_run.append(add_info)
                 break
 
-            worst = np.argmin(self.live_logl)  # index
+            worst = xp.argmin(self.live_logl)  # index
             # Locate the "live" point with the lowest `logl`.
             worst_it = self.live_it[worst]  # when point was proposed
             boundidx = self.live_bound[worst]  # associated bound index
@@ -848,7 +860,7 @@ class Sampler:
                 if nplateau > 1:
                     self.plateau_mode = True
                     self.plateau_counter = nplateau
-                    self.plateau_logdvol = np.log(1. /
+                    self.plateau_logdvol = xp.log(1. /
                                                   (self.nlive + 1)) + logvol
                     # this is log (delta vol)
 
@@ -856,7 +868,7 @@ class Sampler:
                 # Expected ln(volume) shrinkage.
                 cur_dlv = self.dlv
             else:
-                cur_dlv = -np.log1p(-np.exp(self.plateau_logdvol - logvol))
+                cur_dlv = -xp.log1p(-xp.exp(self.plateau_logdvol - logvol))
             assert cur_dlv > 0
             logvol -= cur_dlv
 
@@ -914,13 +926,26 @@ class Sampler:
                          ))
 
             # Update the live point (previously our "worst" point).
-            self.live_u[worst] = u
-            self.live_v[worst] = v
-            self.live_logl[worst] = logl
-            self.live_bound[worst] = bounditer
-            self.live_it[worst] = self.it
-            if self.blob:
-                self.live_blobs[worst] = new_blob
+            if "jax" in xp.__name__:
+                self.live_u = self.live_u.at[worst].set(u)
+                self.live_v = self.live_v.at[worst].set(v)
+                from .utils import LoglOutput
+                if isinstance(logl, LoglOutput):
+                    self.live_logl = self.live_logl.at[worst].set(logl.val)
+                else:
+                    self.live_logl = self.live_logl.at[worst].set(logl)
+                self.live_bound = self.live_bound.at[worst].set(bounditer)
+                self.live_it = self.live_it.at[worst].set(self.it)
+                if self.blob:
+                    self.live_blobs = self.live_blobs.at[worst].set(new_blob)
+            else:
+                self.live_u[worst] = u
+                self.live_v[worst] = v
+                self.live_logl[worst] = logl
+                self.live_bound[worst] = bounditer
+                self.live_it[worst] = self.it
+                if self.blob:
+                    self.live_blobs[worst] = new_blob
             # Compute our sampling efficiency.
             self.eff = 100. * self.it / self.ncall
 

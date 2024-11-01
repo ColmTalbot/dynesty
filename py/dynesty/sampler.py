@@ -365,24 +365,10 @@ class Sampler:
         else:
             args = ()
         if not self.unit_cube_sampling:
-            point_queue = []
             evolve_point = self.evolve_point
-            for _ in range(self.queue_size - self.nqueue):
-                point, _ = self.propose_point(*args)
-                point_queue.append(point)
-            point_queue = jax.numpy.vstack(point_queue)
-            self.nqueue = self.queue_size
         else:
-            # Propose/evaluate points directly from the unit cube.
-            point_queue = self.rstate.random(size=(self.queue_size -
-                                                   self.nqueue, self.npdim))
             evolve_point = sample_unif
-            self.nqueue = self.queue_size
-        axis = xp.identity(self.ncdim)  # + xp.zeros(self.queue_size - self.nqueue)
-        if self.queue_size > 1:
-            seeds = get_seed_sequence(self.rstate, self.queue_size)
-        else:
-            seeds = [self.rstate]
+        point_queue = self.live_u.copy()
 
         for key, value in self.kwargs.items():
             if isinstance(value, np.ndarray):
@@ -394,7 +380,7 @@ class Sampler:
         ptform = self.prior_transform
         lnl = self.loglikelihood
         u, v, logl, nc, blob = evolve_point(
-            point_queue[0], None, self.rstate.key, ptform, lnl, loglstar, self.scale, kwargs
+            self.live_u, self.rstate.key, ptform, lnl, loglstar, self.scale, kwargs
         )
         if blob is None:
             blob = [None] * self.queue_size

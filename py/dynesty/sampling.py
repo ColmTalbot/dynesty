@@ -14,7 +14,6 @@ import warnings
 import numpy as np
 from numpy import linalg
 import jax
-from scipy._lib._array_api import array_namespace
 
 from .utils import unitcheck, apply_reflect, get_random_generator
 from .bounding import randsphere
@@ -31,7 +30,7 @@ SamplerArgument = namedtuple('SamplerArgument', [
 
 
 @partial(jax.jit, static_argnames=("prior_transform", "loglikelihood"))
-def sample_unif(u, axes, rseed, prior_transform, loglikelihood, loglstar, scale, kwargs):
+def sample_unif(live, rseed, prior_transform, loglikelihood, loglstar, scale, kwargs):
     """
     Evaluate a new point sampled uniformly from a bounding proposal
     distribution. Parameters are zipped within `args` to utilize
@@ -84,13 +83,13 @@ def sample_unif(u, axes, rseed, prior_transform, loglikelihood, loglstar, scale,
         applicable for uniform sampling.**
 
     """
-    new_u = jax.random.uniform(rseed, (10000, u.shape[0]))
-    v = prior_transform(new_u.T).T
+    u = jax.random.uniform(rseed, live.shape)
+    v = prior_transform(u.T).T
     logl = jax.vmap(loglikelihood)(v)
-    nc = jax.numpy.ones(10000, dtype=jax.numpy.int32)
+    nc = jax.numpy.ones(1000, dtype=jax.numpy.int32)
     blob = None
 
-    return new_u, v, logl, nc, blob
+    return u, v, logl, nc, blob
 
 
 def sample_rwalk(args):

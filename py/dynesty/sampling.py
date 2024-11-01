@@ -84,11 +84,10 @@ def sample_unif(u, axes, rseed, prior_transform, loglikelihood, loglstar, scale,
         applicable for uniform sampling.**
 
     """
-    new_u = jax.random.uniform(rseed, (1000, u.shape[0]))
-    xp = array_namespace(u)
-    v = xp.asarray(jax.vmap(prior_transform)(new_u)).T
+    new_u = jax.random.uniform(rseed, (10000, u.shape[0]))
+    v = prior_transform(new_u.T).T
     logl = jax.vmap(loglikelihood)(v)
-    nc = jax.numpy.ones(1000, dtype=jax.numpy.int32)
+    nc = jax.numpy.ones(10000, dtype=jax.numpy.int32)
     blob = None
 
     return new_u, v, logl, nc, blob

@@ -210,8 +210,7 @@ class Sampler:
             # Compute the prior transform using the default `map` function.
             self.live_v = xp.array(
                 list(map(self.prior_transform, xp.asarray(self.live_u))))
-        self.live_logl = xp.array(
-            [_.val for _ in self.loglikelihood.map(xp.asarray(self.live_v))])
+        self.live_logl = jax.vmap(self.loglikelihood, in_axes=(0,))(self.live_v)
 
         self.live_bound = xp.zeros(self.nlive, dtype=int)
         self.live_it = xp.zeros(self.nlive, dtype=int)
@@ -394,10 +393,6 @@ class Sampler:
         }
         ptform = self.prior_transform
         lnl = self.loglikelihood
-        # map_axes = (0, None, 0, None, None, None, None, None)
-        # u, v, logl, nc, blob = jax.vmap(evolve_point, in_axes=map_axes)(
-        #     point_queue, axis, seeds, ptform, lnl, loglstar, self.scale, kwargs
-        # )
         u, v, logl, nc, blob = evolve_point(
             point_queue[0], None, self.rstate.key, ptform, lnl, loglstar, self.scale, kwargs
         )
@@ -409,14 +404,16 @@ class Sampler:
                 for values in zip(*[value for value in blob.values()])
             ]
         self.queue = list(zip(u, v, logl, nc, blob))
+        self.nqueue = len(self.queue)
         self._add_insertion_indices_to_queue(point_queue)
 
     def _add_insertion_indices_to_queue(self, point_queue):
+        from .utils import likelihood_insertion_index, distance_insertion_index
         new_queue = list()
         for start, (u, v, logl, nc, blob) in zip(point_queue, self.queue):
             if blob is not None:
-                blob["distance_insertion"] = self._distance_insertion_index(start, u)
-                blob["likelihood_insertion"] = self._likelihood_insertion_index(logl)
+                blob["distance_insertion"] = distance_insertion_index(self.live_u, start, u)
+                blob["likelihood_insertion"] = likelihood_insertion_index(self.live_logl, logl)
             new_queue.append((u, v, logl, nc, blob))
         self.queue = new_queue
 
@@ -547,7 +544,7 @@ class Sampler:
         logvols += logvol
         # Sorting remaining live points.
         lsort_idx = xp.argsort(self.live_logl)
-        loglmax = max(self.live_logl)
+        loglmax = xp.max(self.live_logl)
 
         # Grabbing relevant values from the last dead point.
         if not self.unit_cube_sampling:
@@ -758,9 +755,9 @@ class Sampler:
 
         # Initialize quantities.
         if maxcall is None:
-            maxcall = sys.maxsize
+            maxcall = int(2e30 - 1)
         if maxiter is None:
-            maxiter = sys.maxsize
+            maxiter = int(2e30 - 1)
         self.save_samples = save_samples
         self.save_bounds = save_bounds
         ncall = 0

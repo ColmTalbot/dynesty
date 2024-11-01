@@ -16,9 +16,11 @@ from collections import namedtuple
 from functools import partial
 import pickle as pickle_module
 # To allow replacing of the pickler
+os.environ["SCIPY_ARRAY_API"] = "1"  # noqa  # flag for scipy backend switching
 import numpy as np
-from scipy.special import logsumexp
+from jax.scipy.special import logsumexp
 from scipy.stats import randint, ks_1samp
+from scipy._lib._array_api import array_namespace
 from ._version import __version__ as DYNESTY_VERSION
 try:
     import tqdm
@@ -1445,6 +1447,7 @@ def compute_integrals(logl=None, logvol=None, reweight=None):
     return saved_logwt, saved_logz, saved_logzvar, saved_h
 
 
+@jax.jit
 def progress_integration(loglstar, loglstar_new, logz, logzvar, logvol,
                          dlogvol, h):
     """
@@ -1455,13 +1458,17 @@ def progress_integration(loglstar, loglstar_new, logz, logzvar, logvol,
 
     Return logwt, logz, logzvar, h
     """
+    xp = array_namespace(loglstar)
     # Compute relative contribution to results.
-    logdvol = logsumexp(a=[logvol + dlogvol, logvol], b=[0.5, -0.5])
-    logwt = np.logaddexp(loglstar_new, loglstar) + logdvol  # weight
-    logz_new = np.logaddexp(logz, logwt)  # ln(evidence)
-    lzterm = (math.exp(loglstar - logz_new + logdvol) * loglstar +
-              math.exp(loglstar_new - logz_new + logdvol) * loglstar_new)
-    h_new = (lzterm + math.exp(logz - logz_new) * (h + logz) - logz_new
+    logdvol = logsumexp(
+        a=jax.numpy.array([logvol + dlogvol, logvol]),
+        b=jax.numpy.array([0.5, -0.5]),
+    )
+    logwt = xp.logaddexp(loglstar_new, loglstar) + logdvol  # weight
+    logz_new = xp.logaddexp(logz, logwt)  # ln(evidence)
+    lzterm = (xp.exp(loglstar - logz_new + logdvol) * loglstar +
+              xp.exp(loglstar_new - logz_new + logdvol) * loglstar_new)
+    h_new = (lzterm + xp.exp(logz - logz_new) * (h + logz) - logz_new
              )  # information
     dh = h_new - h
 
@@ -2501,3 +2508,24 @@ def insertion_index_test(result, kind="likelihood", ax=None):
         if ax is not None:
             ax.hist(vals / nlive, bins=30, density=True, histtype="step", label=label)
         return pval
+
+
+@jax.jit
+def distance_insertion_index(live_u, start, point):
+    """
+    Compute the distance insertion index as defined in XXX
+    """
+    xp = array_namespace(point)
+    norms = xp.std(live_u, axis=0)
+    distance = xp.linalg.norm((point - start) / norms)
+    all_distances = xp.array([xp.linalg.norm((start - u) / norms) for u in live_u])
+    return xp.sum(all_distances < distance)
+
+
+@jax.jit
+def likelihood_insertion_index(live_logl, logl):
+    """
+    Compute the likelihood insertion index as defined in arxiv:2006.03371
+    """
+    xp = array_namespace(live_logl)
+    return xp.sum(xp.array(live_logl) < logl)

@@ -394,9 +394,12 @@ class Sampler:
         }
         ptform = self.prior_transform
         lnl = self.loglikelihood
-        map_axes = (0, None, 0, None, None, None, None, None)
-        u, v, logl, nc, blob = jax.vmap(evolve_point, in_axes=map_axes)(
-            point_queue, axis, seeds, ptform, lnl, loglstar, self.scale, kwargs
+        # map_axes = (0, None, 0, None, None, None, None, None)
+        # u, v, logl, nc, blob = jax.vmap(evolve_point, in_axes=map_axes)(
+        #     point_queue, axis, seeds, ptform, lnl, loglstar, self.scale, kwargs
+        # )
+        u, v, logl, nc, blob = evolve_point(
+            point_queue[0], None, self.rstate.key, ptform, lnl, loglstar, self.scale, kwargs
         )
         if blob is None:
             blob = [None] * self.queue_size

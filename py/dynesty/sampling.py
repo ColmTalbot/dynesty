@@ -84,13 +84,14 @@ def sample_unif(u, axes, rseed, prior_transform, loglikelihood, loglstar, scale,
         applicable for uniform sampling.**
 
     """
+    new_u = jax.random.uniform(rseed, (1000, u.shape[0]))
     xp = array_namespace(u)
-    v = xp.asarray(prior_transform(xp.asarray(u)))
-    logl = loglikelihood(v)
-    nc = 1
+    v = xp.asarray(jax.vmap(prior_transform)(new_u)).T
+    logl = jax.vmap(loglikelihood)(v)
+    nc = jax.numpy.ones(1000, dtype=jax.numpy.int32)
     blob = None
 
-    return u, v, logl, nc, blob
+    return new_u, v, logl, nc, blob
 
 
 def sample_rwalk(args):

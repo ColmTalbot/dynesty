@@ -16,10 +16,12 @@ from scipy._lib._array_api import array_namespace
 
 from .results import Results, print_fn
 from .bounding import UnitCube
-from .sampling import sample_unif, SamplerArgument
-from .utils import (get_seed_sequence, get_print_func, progress_integration,
+from .sampling import sample_unif
+from .utils import (get_print_func, progress_integration,
                     IteratorResult, RunRecord, get_neff_from_logwt,
-                    compute_integrals, DelayTimer, _LOWL_VAL)
+                    compute_integrals, DelayTimer, _LOWL_VAL,
+                    distance_insertion_index, likelihood_insertion_index,
+                    )
 
 __all__ = ["Sampler"]
 
@@ -371,7 +373,7 @@ class Sampler:
         point_queue = self.live_u.copy()
 
         for key, value in self.kwargs.items():
-            if isinstance(value, np.ndarray):
+            if isinstance(value, (np.ndarray, list)):
                 self.kwargs[key] = xp.asarray(value)
         kwargs = {
             k: v for k, v in self.kwargs.copy().items()
@@ -394,7 +396,6 @@ class Sampler:
         self._add_insertion_indices_to_queue(point_queue)
 
     def _add_insertion_indices_to_queue(self, point_queue):
-        from .utils import likelihood_insertion_index, distance_insertion_index
         new_queue = list()
         for start, (u, v, logl, nc, blob) in zip(point_queue, self.queue):
             if blob is not None:
@@ -462,7 +463,7 @@ class Sampler:
             # also on purpose this is placed in nqueue==0
             # because we only want update if we are planning to generate
             # new points
-            if self.nqueue == 0:
+            if self.nqueue == 0 and self.unit_cube_sampling:
                 self.update_bound_if_needed(loglstar, ncall=ncall)
 
             # If we satisfy the log-likelihood constraint, we're done!
@@ -741,9 +742,9 @@ class Sampler:
 
         # Initialize quantities.
         if maxcall is None:
-            maxcall = int(2e30 - 1)
+            maxcall = 2**31 - 1
         if maxiter is None:
-            maxiter = int(2e30 - 1)
+            maxiter = 2**31 - 1
         self.save_samples = save_samples
         self.save_bounds = save_bounds
         ncall = 0
